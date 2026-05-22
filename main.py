@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import streamlit as st
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -103,21 +104,25 @@ def _run_agent_streaming(
     agent: Agent,
     prompt: str,
     text_placeholder: object,
-    tool_placeholder: object,
 ) -> tuple[str, list[str]]:
-    streamed_chunks: list[str] = []
+    rendered_parts: list[str] = []
     streamed_tool_names: list[str] = []
 
-    def _refresh_tool_placeholder() -> None:
-        if streamed_tool_names:
-            tool_placeholder.caption(f"呼び出しツール: {', '.join(streamed_tool_names)}")
-        else:
-            tool_placeholder.empty()
+    started_at = time.monotonic()
 
-    def _capture_tool_name(name: object) -> None:
+    def _render_message() -> None:
+        text_placeholder.markdown("".join(rendered_parts).strip())
+
+    def _capture_tool_name(name: object, *, force_render: bool = True) -> None:
         if isinstance(name, str) and name and name not in streamed_tool_names:
             streamed_tool_names.append(name)
-            _refresh_tool_placeholder()
+
+            elapsed = time.monotonic() - started_at
+            marker = f"\n\n🔧 {elapsed:.1f}秒 ツール呼び出し: {name}\n\n"
+            rendered_parts.append(marker)
+
+            if force_render:
+                _render_message()
 
     async def _consume_stream() -> AgentResult:
         final_result: AgentResult | None = None
@@ -125,8 +130,8 @@ def _run_agent_streaming(
         async for stream_event in agent.stream_async(prompt):
             data = stream_event.get("data") if isinstance(stream_event, dict) else None
             if isinstance(data, str) and data:
-                streamed_chunks.append(data)
-                text_placeholder.markdown("".join(streamed_chunks))
+                rendered_parts.append(data)
+                _render_message()
 
             if isinstance(stream_event, dict):
                 raw_event = stream_event.get("event")
@@ -157,23 +162,19 @@ def _run_agent_streaming(
     result_tool_names = _extract_tool_names(result)
     for tool_name in result_tool_names:
         if tool_name not in streamed_tool_names:
-            streamed_tool_names.append(tool_name)
+            _capture_tool_name(tool_name, force_render=False)
 
-    _refresh_tool_placeholder()
-
-    answer = "".join(streamed_chunks).strip()
+    answer = "".join(rendered_parts).strip()
     if not answer:
         answer = _extract_text(result)
+        text_placeholder.markdown(answer)
+    else:
         text_placeholder.markdown(answer)
 
     return answer, streamed_tool_names
 
 
 def _render_chat_message(message: dict[str, object]) -> None:
-    tool_names = message.get("tool_names")
-    if isinstance(tool_names, list) and tool_names:
-        st.caption(f"呼び出しツール: {', '.join(str(name) for name in tool_names)}")
-
     content = message.get("content", "")
     st.markdown(str(content))
 
@@ -211,6 +212,10 @@ def main() -> None:
         return
 
     with st.sidebar:
+        st.subheader("利用中LLM")
+        st.write(f"- Provider: Ollama")
+        st.write(f"- Model: {OLLAMA_MODEL_ID}")
+
         st.subheader("質問候補")
         st.write("下の候補を押すと、そのままチャット入力として送信できます。")
 
@@ -245,7 +250,6 @@ def main() -> None:
         _render_chat_message({"role": "user", "content": prompt})
 
     with st.chat_message("assistant"):
-        tool_placeholder = st.empty()
         text_placeholder = st.empty()
 
         try:
@@ -253,12 +257,10 @@ def main() -> None:
                 agent,
                 prompt,
                 text_placeholder=text_placeholder,
-                tool_placeholder=tool_placeholder,
             )
         except Exception as exc:  # noqa: BLE001  # pragma: no cover - runtime environment dependent
             answer = f"エージェント実行中にエラーが発生しました: {exc}"
             tool_names = []
-            tool_placeholder.empty()
             text_placeholder.markdown(answer)
 
     st.session_state.messages.append({"role": "assistant", "content": answer, "tool_names": tool_names})
