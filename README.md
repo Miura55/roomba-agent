@@ -20,6 +20,9 @@ MCP 経由でロボット制御ツールを呼び出し、Ollama のローカル
 - MCP Python SDK
 - Ollama
 
+## 前提条件
+- https://github.com/Miura55/roomba_mcp_server をローカルにクローンしてセットアップしていること
+
 ## 事前準備
 
 ### 1. 依存関係のインストール
